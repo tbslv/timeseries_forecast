@@ -5,6 +5,7 @@ import yfinance as yf
 import matplotlib.pyplot as plt
 from pandas_datareader import data as pdr
 from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import roc_curve, auc
 
 ''' DATA FETCHING FUNCTIONS '''
 
@@ -186,45 +187,45 @@ def add_custom_features(data, suffixes=['_btc', '_oil', '_gold', '_sp500']):
 	return data
 
 def log_norm_scale(df, log_norms=None, scaler = None,non_scalables=None):
-    """
-    Performs log-normal transformation on specified columns and Min-Max scaling on the rest.
-    
-    Parameters:
-    - df: pandas DataFrame to process.
-    - log_norms: list of columns to apply log-normal transformation (default: None).
-    - non_scalables: list of columns to exclude from Min-Max scaling (default: None).
-    
-    Returns:
-    - Processed DataFrame with log-normal transformation and Min-Max scaling applied.
-    """
-    
-    # Handle default values
-    log_norms = log_norms or []
-    non_scalables = non_scalables or []
-    
-    # Copy the DataFrame to avoid modifying the original data
-    df_processed = df.copy()
+	"""
+	Performs log-normal transformation on specified columns and Min-Max scaling on the rest.
+	
+	Parameters:
+	- df: pandas DataFrame to process.
+	- log_norms: list of columns to apply log-normal transformation (default: None).
+	- non_scalables: list of columns to exclude from Min-Max scaling (default: None).
+	
+	Returns:
+	- Processed DataFrame with log-normal transformation and Min-Max scaling applied.
+	"""
+	
+	# Handle default values
+	log_norms = log_norms or []
+	non_scalables = non_scalables or []
+	
+	# Copy the DataFrame to avoid modifying the original data
+	df_processed = df.copy()
 
-    # Apply log-normal transformation
-    for col in log_norms:
-        if col in df_processed.columns:
-            # Add a small constant to avoid log(0)
-            df_processed[col] = np.log1p(df_processed[col])
-    
-    if scaler:
-	    # Define columns to scale
-	    columns_to_scale = df_processed.columns.difference(non_scalables)
-	    
-	    # Initialize MinMaxScaler
-	    scaler = MinMaxScaler()
-	    
-	    # Apply Min-Max scaling
-	    df_processed[columns_to_scale] = scaler.fit_transform(df_processed[columns_to_scale])
-    
-    	return df_processed
+	# Apply log-normal transformation
+	for col in log_norms:
+		if col in df_processed.columns:
+			# Add a small constant to avoid log(0)
+			df_processed[col] = np.log1p(df_processed[col])
+	
+	if scaler:
+		# Define columns to scale
+		columns_to_scale = df_processed.columns.difference(non_scalables)
+		
+		# Initialize MinMaxScaler
+		scaler = MinMaxScaler()
+		
+		# Apply Min-Max scaling
+		df_processed[columns_to_scale] = scaler.fit_transform(df_processed[columns_to_scale])
+	
+		return df_processed
 
-    else:
-    	return df_processed
+	else:
+		return df_processed
 
 def add_technical_indicators(df, suffixes=['_btc', '_oil', '_gold', '_sp500'], rsi_periods=[10, 14, 20]):
 	"""
@@ -262,48 +263,135 @@ def add_technical_indicators(df, suffixes=['_btc', '_oil', '_gold', '_sp500'], r
 
 
 def detect_outliers(df, method='iqr', threshold=1.5):
-    """
-    Detects outliers in each column of a DataFrame based on the specified method.
+	"""
+	Detects outliers in each column of a DataFrame based on the specified method.
 
+	Parameters:
+	- df: pandas DataFrame to analyze.
+	- method: Method to use for outlier detection ('iqr' or 'z-score'). Default is 'iqr'.
+	- threshold: Threshold to define outliers. For 'iqr', it's the multiplier of IQR; 
+				 for 'z-score', it's the z-score threshold. Default is 1.5 for IQR, 3 for Z-score.
+
+	Returns:
+	- Dictionary with column names as keys and lists of row indices with outliers as values.
+	"""
+	outliers = {}
+
+	# Loop through each column in the DataFrame
+	for col in df.select_dtypes(include=[np.number]).columns:  # Only process numeric columns
+		if method == 'iqr':
+			# Calculate IQR
+			Q1 = df[col].quantile(0.25)
+			Q3 = df[col].quantile(0.75)
+			IQR = Q3 - Q1
+			
+			# Define outliers as values outside the range [Q1 - threshold*IQR, Q3 + threshold*IQR]
+			lower_bound = Q1 - threshold * IQR
+			upper_bound = Q3 + threshold * IQR
+			outlier_indices = df[(df[col] < lower_bound) | (df[col] > upper_bound)].index.tolist()
+		
+		elif method == 'z-score':
+			# Calculate Z-scores
+			mean = df[col].mean()
+			std_dev = df[col].std()
+			z_scores = (df[col] - mean) / std_dev
+			
+			# Define outliers as values with Z-scores greater than the threshold
+			outlier_indices = df[(np.abs(z_scores) > threshold)].index.tolist()
+		
+		else:
+			raise ValueError("Invalid method. Choose 'iqr' or 'z-score'.")
+		
+		# Add to the dictionary if outliers are found
+		if outlier_indices:
+			outliers[col] = outlier_indices
+	
+	return outliers
+
+def differentiator(df, columns):
+    """
+    Calculate the derivative (difference between consecutive rows) for specified columns.
+    
     Parameters:
-    - df: pandas DataFrame to analyze.
-    - method: Method to use for outlier detection ('iqr' or 'z-score'). Default is 'iqr'.
-    - threshold: Threshold to define outliers. For 'iqr', it's the multiplier of IQR; 
-                 for 'z-score', it's the z-score threshold. Default is 1.5 for IQR, 3 for Z-score.
+    df (pd.DataFrame): The input DataFrame.
+    columns (list of str): List of column names to differentiate.
 
     Returns:
-    - Dictionary with column names as keys and lists of row indices with outliers as values.
+    pd.DataFrame: A new DataFrame with additional columns containing the derivatives.
     """
-    outliers = {}
-
-    # Loop through each column in the DataFrame
-    for col in df.select_dtypes(include=[np.number]).columns:  # Only process numeric columns
-        if method == 'iqr':
-            # Calculate IQR
-            Q1 = df[col].quantile(0.25)
-            Q3 = df[col].quantile(0.75)
-            IQR = Q3 - Q1
-            
-            # Define outliers as values outside the range [Q1 - threshold*IQR, Q3 + threshold*IQR]
-            lower_bound = Q1 - threshold * IQR
-            upper_bound = Q3 + threshold * IQR
-            outlier_indices = df[(df[col] < lower_bound) | (df[col] > upper_bound)].index.tolist()
-        
-        elif method == 'z-score':
-            # Calculate Z-scores
-            mean = df[col].mean()
-            std_dev = df[col].std()
-            z_scores = (df[col] - mean) / std_dev
-            
-            # Define outliers as values with Z-scores greater than the threshold
-            outlier_indices = df[(np.abs(z_scores) > threshold)].index.tolist()
-        
-        else:
-            raise ValueError("Invalid method. Choose 'iqr' or 'z-score'.")
-        
-        # Add to the dictionary if outliers are found
-        if outlier_indices:
-            outliers[col] = outlier_indices
+    # Create a copy of the DataFrame to avoid modifying the original
+    df_copy = df.copy()
     
-    return outliers
+    # Loop through each specified column and calculate the derivative
+    for col in columns:
+        if col in df_copy.columns:
+            # Calculate the difference and add it as a new column with '_change' suffix
+            df_copy[f"{col}_change"] = df_copy[col].diff()
+        else:
+            print(f"Column '{col}' not found in DataFrame.")
+    
+    return df_copy
+
+
+
+class ROCClassifier:
+    def __init__(self, y_true, y_scores):
+        """
+        Initialize with true labels and predicted scores.
+        y_true : array-like
+            Ground truth (correct) labels for the data.
+        y_scores : array-like
+            Predicted scores, typically probabilities or decision values.
+        """
+        self.y_true = y_true
+        self.y_scores = y_scores
+        self.fpr = None
+        self.tpr = None
+        self.thresholds = None
+        self.best_threshold = None
+    
+    def compute_roc(self):
+        """
+        Computes the ROC curve and stores FPR, TPR, and thresholds.
+        """
+        self.fpr, self.tpr, self.thresholds = roc_curve(self.y_true, self.y_scores)
+    
+    def find_best_threshold(self):
+        """
+        Finds the best threshold that maximizes the separation between classes.
+        """
+        # Compute the distance to the top-left corner (0, 1) for each threshold
+        distances = np.sqrt((self.fpr - 0)**2 + (self.tpr - 1)**2)
+        # Get the index of the minimum distance
+        best_index = np.argmin(distances)
+        # Set the best threshold
+        self.best_threshold = self.thresholds[best_index]
+    
+    def plot_roc(self):
+        """
+        Plots the ROC curve and marks the best threshold.
+        """
+        # Compute the Area Under the Curve (AUC) for reference
+        roc_auc = auc(self.fpr, self.tpr)
+        
+        plt.figure(figsize=(8, 6))
+        plt.plot(self.fpr, self.tpr, color='blue', lw=2, label=f'ROC curve (AUC = {roc_auc:.2f})')
+        plt.plot([0, 1], [0, 1], color='gray', linestyle='--', lw=2)
+        
+        # Mark the best threshold
+        best_index = np.argmin(np.sqrt((self.fpr - 0)**2 + (self.tpr - 1)**2))
+        plt.scatter(self.fpr[best_index], self.tpr[best_index], color='red', label=f'Best Threshold = {self.best_threshold:.2f}')
+        
+        plt.xlabel('False Positive Rate (FPR)')
+        plt.ylabel('True Positive Rate (TPR)')
+        plt.title('Receiver Operating Characteristic (ROC) Curve')
+        plt.legend(loc='lower right')
+        plt.show()
+    
+    def get_best_threshold(self):
+        """
+        Returns the best threshold for maximum separation.
+        """
+        return self.best_threshold
+
 
